@@ -1,0 +1,39 @@
+# Local run with Postgres, mirroring a production shape (this project's
+# brief names Postgres as the tech stack; SQLite remains the free-tier
+# default when no DATABASE_URL is set - see render.yaml).
+#
+#   docker compose up --build        ->  http://localhost:7860
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: incident
+      POSTGRES_PASSWORD: incident
+      POSTGRES_DB: incident_assistant
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U incident -d incident_assistant"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    ports:
+      - "7860:7860"
+    environment:
+      DATABASE_URL: postgresql+psycopg://incident:incident@db:5432/incident_assistant
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
+      SEED_ON_STARTUP: "true"
+      LOG_LEVEL: INFO
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

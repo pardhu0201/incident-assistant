@@ -1,0 +1,26 @@
+# --- Web layer ---
+fastapi==0.120.0
+uvicorn[standard]==0.38.0
+python-multipart==0.0.20
+pydantic==2.12.3
+pydantic-settings==2.12.0
+
+# --- Persistence ---
+SQLAlchemy==2.0.44
+psycopg[binary]==3.2.12
+
+# --- Agents / orchestration ---
+langgraph==0.6.11
+langchain-core==0.3.83
+langchain-text-splitters==0.3.11
+
+# --- LLM provider ---
+anthropic==1.7.0
+
+# --- Retrieval ---
+numpy==2.3.4
+
+# --- Observability ---
+opentelemetry-api==1.29.0
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp-proto-http==1.29.0

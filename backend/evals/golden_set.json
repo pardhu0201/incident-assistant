@@ -1,0 +1,69 @@
+{
+  "description": "Golden evaluation set for the Incident Assistant, over the 6 incidents produced by replaying the bundled sample log dataset (checkout-api.jsonl) against the 5 seeded runbooks.",
+  "cases": [
+    {
+      "id": "pool-exhaustion",
+      "service": "checkout-api",
+      "message_contains": "connection pool exhausted",
+      "expected_document": "Database Connection Pool Runbook",
+      "expected_tool": "restart_service",
+      "must_contain": ["restart"],
+      "expect_test_gate_pass": true
+    },
+    {
+      "id": "pool-timeout-downstream",
+      "service": "checkout-api",
+      "message_contains": "Request timed out waiting for database connection pool",
+      "expected_document": "Database Connection Pool Runbook",
+      "expected_tool": "restart_service",
+      "must_contain": [],
+      "expect_test_gate_pass": true
+    },
+    {
+      "id": "payment-gateway-timeout",
+      "service": "payments-gateway",
+      "message_contains": "Upstream payment processor request timed out",
+      "expected_document": "Payment Gateway Timeout Runbook",
+      "expected_tool": "rollback_deployment",
+      "must_contain": ["rollback"],
+      "expect_test_gate_pass": true
+    },
+    {
+      "id": "inventory-oom-climb",
+      "service": "inventory-service",
+      "message_contains": "Heap usage",
+      "expected_document": "Memory Leak and OOM Runbook",
+      "expected_tool": "restart_service",
+      "must_contain": [],
+      "expect_test_gate_pass": true
+    },
+    {
+      "id": "inventory-oom-killed",
+      "service": "inventory-service",
+      "message_contains": "Process restarted by supervisor",
+      "expected_document": "Memory Leak and OOM Runbook",
+      "expected_tool": "restart_service",
+      "must_contain": [],
+      "expect_test_gate_pass": true
+    },
+    {
+      "id": "checkout-rate-limit",
+      "service": "checkout-api",
+      "message_contains": "rate limit exceeded",
+      "expected_document": "Capacity and Autoscaling Runbook",
+      "expected_tool": "scale_service",
+      "must_contain": ["scal"],
+      "expect_test_gate_pass": true
+    },
+    {
+      "id": "out-of-scope-error",
+      "service": "checkout-api",
+      "message_contains": null,
+      "custom_message": "Printer on the third floor is out of toner and jammed again",
+      "expected_document": null,
+      "expected_tool": null,
+      "must_contain": [],
+      "expect_low_confidence": true
+    }
+  ]
+}

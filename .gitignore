@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Env / secrets
+.env
+.env.local
+*.env
+!.env.example
+
+# Data / runtime artifacts
+backend/data/runtime/
+backend/data/*.db
+backend/data/*.db-journal
+backend/eval-report.json
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/tsconfig.tsbuildinfo
+.vercel/
+
+# Build artifact copied in for local Docker testing
+backend/static/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
