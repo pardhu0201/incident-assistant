@@ -5,10 +5,11 @@
 # file automatically since it lives at the repo root.
 #
 # No managed database: Render's free Postgres now expires 30 days after
-# creation. SQLite is this app's zero-setup default and persists on Render's
-# container disk for the life of the service, so the free tier stays free
-# indefinitely. Point DATABASE_URL at a Neon (or any) Postgres connection
-# string later if you want a longer-lived store - no code change needed.
+# creation. SQLite is this app's zero-setup default, so the free tier stays
+# free indefinitely - but the free tier's disk is ephemeral: data is wiped on
+# every restart, redeploy or wake from sleep (reload the sample logs). Point
+# DATABASE_URL at a Neon (or any) Postgres connection string for a store that
+# survives restarts - no code change needed.
 #
 # Render's free web services sleep after 15 minutes of inactivity and take
 # roughly 50 seconds to wake on the next request - expected for a free-tier

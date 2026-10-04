@@ -2,9 +2,11 @@
 
 An incident is the unit the rest of the system reasons about - one row per
 distinct problem, however many log lines it produced. A new error event joins
-an existing **open** incident when it shares that incident's fingerprint and
-service and falls within `INCIDENT_WINDOW_SECONDS` of its last event;
-otherwise it opens a new incident. This is deliberately simple (no ML
+an existing incident when it shares that incident's fingerprint and service
+and falls within `INCIDENT_WINDOW_SECONDS` of its last event; otherwise it
+opens a new incident. If the matched incident was already resolved by a fix
+and the event is newer than anything seen before, the incident is
+**reopened** - a recurrence after a fix must be visible to on-call. This is deliberately simple (no ML
 clustering) so it is fully explainable in an incident review - "why did these
 47 log lines become one incident" always has a one-sentence answer.
 """
@@ -17,10 +19,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Incident, LogEvent
+from app.db.models import AuditLog, Incident, LogEvent
 from app.ingestion.fingerprint import compute_fingerprint
 
 ERROR_LEVELS = {"ERROR", "CRITICAL", "FATAL"}
+# Severity only ever escalates: a CRITICAL line after a FATAL one must not
+# downgrade the incident.
+SEVERITY_RANK = {"ERROR": 1, "CRITICAL": 2, "FATAL": 3}
+# A fix was applied; a *newer* occurrence of the same error means it did not
+# hold, so the incident is reopened rather than silently absorbing events.
+FIXED_STATUSES = {"resolved"}
+REOPENED_STATUS = "reopened"
 
 
 def make_title(service: str, message: str) -> str:
@@ -83,11 +92,29 @@ def assign_to_incident(db: Session, event: LogEvent) -> Incident | None:
         db.add(incident)
         db.flush()
     else:
+        # Reopen only for an occurrence *after* everything seen so far: late,
+        # out-of-order lines from before the fix must not reopen it.
+        if incident.status in FIXED_STATUSES and event.occurred_at > incident.last_seen:
+            previous = incident.status
+            incident.status = REOPENED_STATUS
+            db.add(
+                AuditLog(
+                    actor="clustering",
+                    action="incident.reopened",
+                    entity="incident",
+                    entity_id=incident.id,
+                    payload={
+                        "previous_status": previous,
+                        "event_id": event.id,
+                        "occurred_at": event.occurred_at.isoformat(),
+                    },
+                )
+            )
         if event.occurred_at < incident.first_seen:
             incident.first_seen = event.occurred_at
         if event.occurred_at > incident.last_seen:
             incident.last_seen = event.occurred_at
-        if event.level == "CRITICAL" or (event.level == "FATAL"):
+        if SEVERITY_RANK.get(event.level, 0) > SEVERITY_RANK.get(incident.severity, 0):
             incident.severity = event.level
 
     incident.event_count += 1

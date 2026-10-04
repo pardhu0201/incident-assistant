@@ -171,11 +171,43 @@ export interface GraphTopology {
   edges: { source: string; target: string; condition?: string }[];
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(apiUrl(path), {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
+// Deployments that set ADMIN_TOKEN reject approval decisions without it. The
+// token is asked for once, on the first 401, and kept in this browser.
+const TOKEN_KEY = "incident-assistant-admin-token";
+
+function readToken(): string {
+  try {
+    return window.localStorage.getItem(TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function storeToken(token: string): void {
+  try {
+    if (token) window.localStorage.setItem(TOKEN_KEY, token);
+    else window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage unavailable - the token just is not remembered */
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = readToken();
+  if (token) headers["X-Admin-Token"] = token;
+
+  const response = await fetch(apiUrl(path), { ...init, headers });
+
+  if (response.status === 401 && !retried) {
+    const entered = window.prompt("This deployment requires an admin token to approve fixes:");
+    if (entered?.trim()) {
+      storeToken(entered.trim());
+      return request<T>(path, init, true);
+    }
+  }
+  if (response.status === 401) storeToken("");
+
   if (!response.ok) {
     let detail = response.statusText;
     try {

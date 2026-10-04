@@ -98,6 +98,16 @@ execute it.**
   and it only runs on `decision == "approve"` - it re-validates arguments and re-runs
   preflight immediately before executing, in case service state changed since the
   proposal was made.
+- **Exactly-once execution.** A decision first *claims* the approval with an atomic
+  `UPDATE ... WHERE status = 'pending'`, so two concurrent approvals cannot both run the
+  fix: one wins, the other gets HTTP 409.
+- **One live proposal per incident.** Re-analysing an incident retires any older
+  pending approval for it (`status = "superseded"`); it was computed against state that
+  may no longer hold. Preflight also blocks no-op actions (e.g. scaling to the current
+  replica count), so a stale fix can never be reported as "Applied".
+- **Optional lock-down.** With `ADMIN_TOKEN` set, approval decisions require an
+  `X-Admin-Token` header. Ingestion and analysis stay open - they only propose. This is
+  a shared secret, not user auth; a real deployment would sit behind SSO.
 - An out-of-scope or low-confidence diagnosis never reaches the approval queue at all;
   `verification_agent.py`'s relevance floor routes it to `escalate` instead, so it can
   never be rubber-stamped by a distracted reviewer.
@@ -119,10 +129,16 @@ Key tables (`app/db/models.py`):
   that preflight and the test gate check against.
 - `OtelSpan` - every finished span, persisted by the custom `DbSpanExporter`.
 
-**Timestamps are always naive UTC** throughout the codebase (`_parse_timestamp()`
-normalizes any timezone-aware or `Z`-suffixed input before storage). SQLite compares
-naive and aware datetimes inconsistently, so incident-window clustering intentionally
-never stores timezone-aware values.
+**Timestamps.** Log-derived times (`LogEvent.occurred_at`, `Incident.first_seen` /
+`last_seen`) are stored naive UTC - `_parse_timestamp()` normalizes any aware or
+`Z`-suffixed input - so incident-window clustering compares like with like.
+Operational times (`ServiceState.last_restarted_at`, approval decisions) are written
+aware, but SQLite hands them back *naive* in a later session while Postgres keeps them
+aware. Any arithmetic against "now" therefore goes through `db.models.as_utc()` /
+`minutes_since()`, which treat a naive value as UTC; subtracting the raw values used
+to raise `TypeError` and broke every analysis on a service once it had been restarted.
+The regression test re-reads the row in a fresh session, because a test in the
+writing session only ever sees the aware in-memory copy.
 
 ## Incident clustering
 
@@ -131,9 +147,15 @@ normalized error message (numbers, UUIDs, IPs, timestamps, and quoted values str
 via regex, deliberately **without** `\b` word boundaries around the number pattern,
 since a boundary fails to match a digit run immediately followed by a unit suffix like
 `28288ms`) and the top stack frame, hashed with BLAKE2b. `ingestion/clustering.py`
-folds a new `ERROR`/`CRITICAL`/`FATAL` event into an existing open incident on the same
+folds a new `ERROR`/`CRITICAL`/`FATAL` event into an existing incident on the same
 service with a matching fingerprint if it falls within `INCIDENT_WINDOW_SECONDS` of
-that incident's last event, otherwise opens a new one.
+that incident's last event, otherwise opens a new one. Severity only ever escalates
+(`ERROR` < `CRITICAL` < `FATAL`).
+
+If the matched incident is already `resolved` and the event is newer than anything
+the incident has seen, the incident is **reopened** (`status = "reopened"`, plus an
+`incident.reopened` audit entry): a recurrence after a fix means the fix did not hold,
+and on-call has to see it. Late, out-of-order lines from before the fix do not reopen it.
 
 ## Observability
 

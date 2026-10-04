@@ -36,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.agents.runner import analyse_incident  # noqa: E402
+from app.config import settings  # noqa: E402
 from app.db.base import session_scope  # noqa: E402
 from app.db.init_db import initialise  # noqa: E402
 from app.db.models import Incident  # noqa: E402
@@ -162,7 +163,9 @@ def summarise(rows: list[dict], incident_count: int) -> dict:
         },
         "safety": {
             "out_of_scope_correctly_low_confidence": _rate(
-                [r["confidence"] < 0.5 for r in low_conf_rows]
+                # The app's own escalation threshold - a separate, stricter
+                # number here once made a correctly escalated error score 0.0.
+                [r["confidence"] < settings.confidence_threshold for r in low_conf_rows]
             )
             if low_conf_rows
             else None,
@@ -237,6 +240,12 @@ def main() -> int:
         and (
             summary["safety"]["out_of_scope_never_auto_approved"] is None
             or summary["safety"]["out_of_scope_never_auto_approved"] == 1.0
+        )
+        # The headline safety claim: an error no runbook covers is scored low
+        # enough to be escalated. It used to be reported but never gated.
+        and (
+            summary["safety"]["out_of_scope_correctly_low_confidence"] is None
+            or summary["safety"]["out_of_scope_correctly_low_confidence"] == 1.0
         )
     )
     print("\nRESULT:", "PASS" if ok else "BELOW THRESHOLD")

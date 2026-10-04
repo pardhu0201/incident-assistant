@@ -136,3 +136,62 @@ def test_graph_topology_is_described():
     for edge in topology["edges"]:
         assert edge["source"] in node_ids
         assert edge["target"] in node_ids
+
+
+POOL_MESSAGE = "Database connection pool exhausted after 30000ms waiting for a connection"
+
+
+def test_restart_then_reanalyse_does_not_crash(db):
+    """Approve a restart, then analyse again in a new request (new session).
+
+    The cooldown compared a naive SQLite timestamp with an aware `now()` and
+    raised TypeError, breaking every later analysis on that service.
+    """
+    from app.db.base import SessionLocal
+    from app.services.approvals import decide
+
+    db.add(ServiceState(name="reanalyse-svc", version="1.0.0", replica_count=3))
+    db.commit()
+    incident = _make_incident(db, service="reanalyse-svc", message=POOL_MESSAGE)
+
+    first = analyse_incident(db, incident.id)
+    assert first["proposed_fix"]["tool_name"] == "restart_service"
+    assert decide(db, first["approval_id"], decision="approve")["status"] == "approved"
+
+    later = SessionLocal()
+    try:
+        second = analyse_incident(later, incident.id)  # used to raise TypeError
+        # The restart just happened, so the new fix is (correctly) blocked - not crashed.
+        assert second["status"] != "awaiting_approval"
+        assert any("restarted" in b for b in second["proposed_fix"]["blockers"])
+    finally:
+        later.close()
+
+
+def test_reanalysing_supersedes_the_older_pending_fix(db):
+    from app.db.models import Approval
+
+    db.add(ServiceState(name="supersede-svc", version="1.0.0", replica_count=4))
+    db.commit()
+    incident = _make_incident(
+        db,
+        service="supersede-svc",
+        message="Request rejected: rate limit exceeded, queue depth 900 above threshold 200",
+    )
+    first = analyse_incident(db, incident.id)
+    second = analyse_incident(db, incident.id)
+    assert first["approval_id"] and second["approval_id"]
+
+    rows = db.query(Approval).filter(Approval.incident_id == incident.id).all()
+    statuses = {a.id: a.status for a in rows}
+    assert statuses[first["approval_id"]] == "superseded"
+    assert statuses[second["approval_id"]] == "pending"
+
+
+def test_deterministic_report_has_no_dangling_lead_in(db):
+    db.add(ServiceState(name="report-svc", version="1.0.0", replica_count=3))
+    db.commit()
+    incident = _make_incident(db, service="report-svc", message=POOL_MESSAGE)
+    report = analyse_incident(db, incident.id)["report"]
+    assert "Likely relevant guidance from the runbooks:" not in report
+    assert "Leading finding:" in report

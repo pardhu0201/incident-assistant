@@ -35,3 +35,18 @@ def test_context_block_is_numbered(db):
     block = build_context_block(results)
     assert block.startswith("[1]")
     assert "source=" in block and "section=" in block
+
+
+def test_error_coverage_ignores_service_name_and_measurements():
+    from app.agents.verification_agent import query_coverage
+
+    evidence = (
+        "checkout api runbook: when the connection pool is exhausted after a timeout, restart"
+    )
+    svc = "checkout-api"
+    # The service name is in every runbook for that service - it must not count.
+    assert query_coverage("Printer out of toner", evidence, ignore_terms=svc) == 0.0
+    assert query_coverage("checkout api printer out of toner", evidence, ignore_terms=svc) == 0.0
+    # Volatile measurements ("28288ms") are not content - a real error is fully covered.
+    real = "connection pool exhausted after 28288ms"
+    assert query_coverage(real, evidence, ignore_terms=svc) == 1.0

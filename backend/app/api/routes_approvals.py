@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.security import require_admin
 from app.db.base import get_session
 from app.db.models import AuditLog
 from app.schemas import ApprovalDecision, ApprovalOut
@@ -48,7 +49,7 @@ def read_approval(approval_id: str, db: Session = Depends(get_session)):
     return _to_out(approval)
 
 
-@router.post("/approvals/{approval_id}/decision")
+@router.post("/approvals/{approval_id}/decision", dependencies=[Depends(require_admin)])
 def submit_decision(
     approval_id: str, payload: ApprovalDecision, db: Session = Depends(get_session)
 ):
@@ -61,7 +62,8 @@ def submit_decision(
             note=payload.note,
         )
     except ApprovalError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        status = 404 if "not found" in str(exc) else 409
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
 
 
 @router.get("/audit")
