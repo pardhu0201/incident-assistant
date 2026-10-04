@@ -21,6 +21,27 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def as_utc(value: datetime | None) -> datetime | None:
+    """Return `value` as an aware UTC datetime.
+
+    SQLite stores no timezone: a `DateTime(timezone=True)` column written as
+    aware comes back *naive* once re-read in a new session, while Postgres
+    returns it aware. Arithmetic against `utcnow()` then raises
+    `TypeError: can't subtract offset-naive and offset-aware datetimes`. Every
+    timestamp in this app is written in UTC, so a naive value is UTC.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def minutes_since(value: datetime) -> float:
+    """Whole elapsed time in minutes (not `timedelta.seconds`, which drops days)."""
+    return (utcnow() - as_utc(value)).total_seconds() / 60
+
+
 # ---------------------------------------------------------------------------
 # Runbook / postmortem knowledge base
 # ---------------------------------------------------------------------------

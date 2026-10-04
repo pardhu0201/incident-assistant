@@ -153,3 +153,18 @@ def test_dashboard_reflects_runs(client):
     assert isinstance(body["flag_counts"], dict)
     assert 0.0 <= body["test_gate_pass_rate"] <= 1.0
     assert isinstance(body["span_summary"], list)
+
+
+def test_decision_validation_and_admin_token(client, monkeypatch):
+    from app.config import settings
+
+    url = "/api/approvals/missing/decision"
+    assert client.post(url, json={"decision": "approve"}).status_code == 404
+    assert client.post(url, json={"decision": "maybe"}).status_code == 422
+
+    monkeypatch.setattr(settings, "admin_token", "s3cret")
+    assert client.post(url, json={"decision": "approve"}).status_code == 401
+    good = client.post(url, json={"decision": "approve"}, headers={"X-Admin-Token": "s3cret"})
+    assert good.status_code == 404
+    # Proposing stays open - only executing a fix is guarded.
+    assert client.post("/api/logs/replay-sample").status_code == 200

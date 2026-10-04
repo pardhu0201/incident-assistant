@@ -111,3 +111,39 @@ def test_info_and_warn_events_are_not_clustered(db):
     summary = ingest_records(db, records)
     assert summary.incidents_opened == 0
     assert summary.incidents_updated == 0
+
+
+def test_a_recurrence_after_a_fix_reopens_the_incident(db):
+    from app.db.models import AuditLog, Incident
+    from app.ingestion.pipeline import ingest_records
+
+    record = {"service": "reopen-svc", "level": "ERROR", "message": "Worker pool wedged"}
+    first = ingest_records(db, [{**record, "timestamp": "2026-03-01T10:00:00Z"}])
+    incident = db.get(Incident, first.incident_ids[0])
+    incident.status = "resolved"  # a fix was applied
+    db.commit()
+
+    # A late line from *before* the fix must not reopen it...
+    ingest_records(db, [{**record, "timestamp": "2026-03-01T09:59:00Z"}])
+    db.refresh(incident)
+    assert incident.status == "resolved"
+
+    # ...but a newer occurrence means the fix did not hold.
+    again = ingest_records(db, [{**record, "timestamp": "2026-03-01T10:05:00Z"}])
+    assert again.incident_ids == [incident.id]
+    db.refresh(incident)
+    assert incident.status == "reopened"
+    assert incident.event_count == 3
+    audit = db.query(AuditLog).filter(AuditLog.entity_id == incident.id).all()
+    assert [a.action for a in audit] == ["incident.reopened"]
+
+
+def test_severity_only_escalates(db):
+    from app.db.models import Incident
+    from app.ingestion.pipeline import ingest_records
+
+    base = {"service": "severity-svc", "message": "Kaboom", "timestamp": "2026-03-01T10:00:00Z"}
+    summary = ingest_records(
+        db, [{**base, "level": "ERROR"}, {**base, "level": "FATAL"}, {**base, "level": "CRITICAL"}]
+    )
+    assert db.get(Incident, summary.incident_ids[0]).severity == "FATAL"

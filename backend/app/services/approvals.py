@@ -9,7 +9,7 @@ tool's `execute()`.
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.db.models import Approval, AuditLog, Incident
@@ -21,6 +21,22 @@ log = get_logger(__name__)
 
 class ApprovalError(Exception):
     pass
+
+
+def _claim(db: Session, approval_id: str) -> bool:
+    """Atomically move a fix out of `pending` so it can only be decided once.
+
+    Check-then-write on the ORM object would let two concurrent approvals both
+    see `pending` and both execute the remediation. A conditional UPDATE is
+    atomic on every backend: exactly one caller gets rowcount 1.
+    """
+    result = db.execute(
+        update(Approval)
+        .where(Approval.id == approval_id, Approval.status == "pending")
+        .values(status="processing")
+    )
+    db.commit()
+    return result.rowcount == 1
 
 
 def list_approvals(db: Session, status: str | None = None, limit: int = 50) -> list[Approval]:
@@ -50,6 +66,10 @@ def decide(
         raise ApprovalError(f"Approval {approval_id} not found")
     if approval.status != "pending":
         raise ApprovalError(f"Approval {approval_id} is already {approval.status}")
+    if not _claim(db, approval_id):
+        db.refresh(approval)
+        raise ApprovalError(f"Approval {approval_id} is already {approval.status}")
+    db.refresh(approval)
 
     approval.decided_by = decided_by
     approval.decision_note = note

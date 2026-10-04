@@ -19,11 +19,11 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 
 from langchain_core.runnables import RunnableConfig
 
 from app.agents.state import AgentState, RunContext, trace_event
+from app.db.models import minutes_since
 from app.telemetry import span
 from app.tools.ops_tools import MIN_RESTART_INTERVAL_MINUTES, get_service
 
@@ -51,13 +51,13 @@ def check_no_restart_loop(ctx: RunContext, args: dict) -> tuple[bool, str]:
     service = get_service(ctx.db, args.get("service", ""))
     if service is None or service.last_restarted_at is None:
         return True, "No prior restart recorded - safe to proceed."
-    elapsed = datetime.now(UTC) - service.last_restarted_at
-    if elapsed < timedelta(minutes=MIN_RESTART_INTERVAL_MINUTES):
+    elapsed = minutes_since(service.last_restarted_at)
+    if elapsed < MIN_RESTART_INTERVAL_MINUTES:
         return (
             False,
-            f"Last restart was {elapsed.seconds // 60}m ago - too soon, risk of a restart loop.",
+            f"Last restart was {int(elapsed)}m ago - too soon, risk of a restart loop.",
         )
-    return True, f"Last restart was {elapsed.seconds // 60}m ago - clear of the cooldown window."
+    return True, f"Last restart was {int(elapsed)}m ago - clear of the cooldown window."
 
 
 def check_replica_capacity(ctx: RunContext, args: dict) -> tuple[bool, str]:

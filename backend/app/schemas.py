@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -126,9 +126,9 @@ class ApprovalOut(BaseModel):
 
 
 class ApprovalDecision(BaseModel):
-    decision: str = Field(description="approve | reject")
-    decided_by: str = "oncall@example.com"
-    note: str = ""
+    decision: Literal["approve", "reject"]
+    decided_by: str = Field(default="oncall@example.com", max_length=160)
+    note: str = Field(default="", max_length=1000)
 
 
 # --- admin -----------------------------------------------------------------

@@ -109,16 +109,36 @@ def _lexical_support(sentence: str, passage: str, idf: dict[str, float]) -> floa
     return matched / total if total else 0.0
 
 
-def query_coverage(error_text: str, evidence_text: str) -> float:
-    """Share of the error's own content words that appear in the evidence."""
-    terms = {t for t in tokenize(error_text) if t not in _STOPWORDS and len(t) > 2}
+def query_coverage(error_text: str, evidence_text: str, ignore_terms: str = "") -> float:
+    """Share of the error's own content words that appear in the evidence.
+
+    Two kinds of token say nothing about whether the runbooks cover *this*
+    error, so neither counts:
+
+    * `ignore_terms` (the service name) - in the evidence for any error from
+      that service, which inflated coverage for unrelated errors;
+    * tokens containing digits ("28288ms", "780mb", "142") - volatile values
+      no runbook can contain, the same parts fingerprinting strips. Counting
+      them penalised every real error for its own measurements.
+    """
+    ignored = set(tokenize(ignore_terms))
+    terms = {
+        t
+        for t in tokenize(error_text)
+        if t not in _STOPWORDS
+        and len(t) > 2
+        and t not in ignored
+        and not any(ch.isdigit() for ch in t)
+    }
     if not terms:
         return 1.0
     evidence_terms = set(tokenize(evidence_text))
     return len(terms & evidence_terms) / len(terms)
 
 
-def check_groundedness(error_text: str, diagnosis: str, retrieved: list[dict]) -> dict:
+def check_groundedness(
+    error_text: str, diagnosis: str, retrieved: list[dict], ignore_terms: str = ""
+) -> dict:
     passages = {item["index"]: item["content"] for item in retrieved}
 
     df: Counter = Counter()
@@ -150,7 +170,7 @@ def check_groundedness(error_text: str, diagnosis: str, retrieved: list[dict]) -
     support = sum(support_scores) / len(support_scores) if support_scores else 0.0
 
     evidence_text = "\n".join(passages.values())
-    term_coverage = query_coverage(error_text, evidence_text) if retrieved else 0.0
+    term_coverage = query_coverage(error_text, evidence_text, ignore_terms) if retrieved else 0.0
     lexical_scores = [item.get("lexical_score") for item in retrieved]
     if any(s is not None for s in lexical_scores):
         top_lexical = max(float(s or 0.0) for s in lexical_scores)
@@ -182,10 +202,16 @@ def verification_node(state: AgentState, config: RunnableConfig) -> dict:
     proposed_fix = state.get("proposed_fix")
     test_gate = state.get("test_gate")
 
-    error_text = f"{state['incident_title']} {state.get('sample_message', '')} {state.get('sample_stack_trace', '')}"
+    # The error's own text only. The title is "<service>: <message>", and the
+    # service name appears throughout the runbooks for that service, so
+    # counting it made an unrelated error ("printer out of toner" on
+    # checkout-api) look half-covered and land just under the threshold.
+    error_text = f"{state.get('sample_message', '')} {state.get('sample_stack_trace', '')}"
 
     with span("agent.verification", incident_id=state["incident_id"]):
-        checks = check_groundedness(error_text, diagnosis, retrieved)
+        checks = check_groundedness(
+            error_text, diagnosis, retrieved, ignore_terms=state.get("incident_service", "")
+        )
 
         fix_blockers = list((proposed_fix or {}).get("blockers") or [])
         fix_warnings = list((proposed_fix or {}).get("warnings") or [])
@@ -240,8 +266,11 @@ def verification_node(state: AgentState, config: RunnableConfig) -> dict:
     review: VerificationOutput = result.value  # type: ignore[assignment]
 
     if result.mode == "claude":
+        # The model is a second opinion that may only pull the score down. (The
+        # previous `min(blended, max(p, llm))` is always just `blended`, so an
+        # over-confident model could lift a weakly grounded diagnosis.)
         blended = 0.5 * checks["groundedness_score"] + 0.5 * review.llm_confidence
-        confidence = min(blended, max(checks["groundedness_score"], review.llm_confidence))
+        confidence = min(checks["groundedness_score"], blended)
     else:
         confidence = checks["groundedness_score"]
     confidence = round(max(0.0, min(1.0, confidence)), 3)

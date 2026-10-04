@@ -8,11 +8,11 @@ fully auditable - all the intelligence lives in the agents, all the
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.db.models import AuditLog, ServiceState
+from app.db.models import AuditLog, ServiceState, minutes_since
 from app.tools.schemas import RestartServiceArgs, RollbackDeploymentArgs, ScaleServiceArgs
 
 MIN_RESTART_INTERVAL_MINUTES = 5
@@ -49,10 +49,10 @@ def preflight_restart_service(db: Session, args: RestartServiceArgs):
         return PreflightResult(ok=False, preview={}, warnings=warnings, blockers=blockers)
 
     if service.last_restarted_at is not None:
-        elapsed = datetime.now(UTC) - service.last_restarted_at
-        if elapsed < timedelta(minutes=MIN_RESTART_INTERVAL_MINUTES):
+        elapsed_minutes = minutes_since(service.last_restarted_at)
+        if elapsed_minutes < MIN_RESTART_INTERVAL_MINUTES:
             blockers.append(
-                f"'{args.service}' was already restarted {elapsed.seconds // 60}m ago - "
+                f"'{args.service}' was already restarted {int(elapsed_minutes)}m ago - "
                 f"restarting again within {MIN_RESTART_INTERVAL_MINUTES}m risks a restart loop."
             )
 
@@ -158,6 +158,13 @@ def preflight_scale_service(db: Session, args: ScaleServiceArgs):
         blockers.append(f"Unknown service '{args.service}' - no ServiceState record.")
         return PreflightResult(ok=False, preview={}, warnings=warnings, blockers=blockers)
 
+    if args.replica_count == service.replica_count:
+        # Typically a stale proposal: another fix already scaled the service
+        # to this count. Executing it would change nothing yet report success.
+        blockers.append(
+            f"'{args.service}' already runs {service.replica_count} replicas - "
+            "scaling to the same count is a no-op."
+        )
     if args.replica_count < service.replica_count / 2 and service.replica_count > 2:
         warnings.append(
             f"Scaling from {service.replica_count} to {args.replica_count} more than halves "

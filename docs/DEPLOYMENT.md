@@ -33,9 +33,11 @@ pushed, the repository is public at `github.com/<you>/incident-assistant`.
 ### Why SQLite, not managed Postgres
 
 Render's free Postgres now expires 30 days after creation. This app defaults to
-SQLite on the container's own disk, which persists for the life of the service and
-never expires - so the whole deployment stays free indefinitely. If you want a
-longer-lived, non-ephemeral store instead, set `DATABASE_URL` to any Postgres
+SQLite on the container's own disk, so the whole deployment stays free indefinitely.
+That disk is **ephemeral** on Render's free tier: it is wiped whenever the service
+restarts, redeploys or wakes from sleep, so the demo comes back empty (click **Load
+sample logs** again) - fine for a demo, not for real data. For a store that survives
+restarts, set `DATABASE_URL` to any Postgres
 connection string (e.g. a free [Neon](https://neon.tech) instance) in the service's
 environment - no code change is needed; `app/config.py` normalizes
 `postgres://` -> `postgresql+psycopg://` automatically.

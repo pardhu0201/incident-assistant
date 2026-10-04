@@ -133,3 +133,81 @@ def test_gate_reports_per_check_timing(db):
     result = run_test_suite(ctx, "restart_service", {"service": "gate-timing-svc"})
     assert all("duration_ms" in c for c in result["checks"])
     assert result["total_ms"] >= 0
+
+
+# --- timestamps read back from the database -----------------------------------
+def _reload(name: str):
+    """A ServiceState fetched in a *fresh* session, the way a later request sees it.
+
+    SQLite returns DateTime(timezone=True) values naive once re-read; a test
+    that checks in the same session that wrote the value only ever sees the
+    aware in-memory copy and cannot catch that.
+    """
+    from app.db.base import SessionLocal
+
+    session = SessionLocal()
+    return session, session.get(ServiceState, name)
+
+
+@pytest.mark.parametrize(("minutes_ago", "blocked"), [(1, True), (60, False), (60 * 49, False)])
+def test_restart_cooldown_survives_a_database_round_trip(db, minutes_ago, blocked):
+    from datetime import timedelta
+
+    name = f"roundtrip-svc-{minutes_ago}"
+    restarted = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+    db.add(ServiceState(name=name, last_restarted_at=restarted))
+    db.commit()
+
+    session, _ = _reload(name)
+    try:
+        tool = get_tool("restart_service")
+        # This used to raise TypeError (naive vs aware datetime).
+        result = tool.preflight(session, tool.validate({"service": name}))
+        assert result.ok is (not blocked)
+
+        ctx = RunContext(db=session, llm=get_llm())
+        gate = run_test_suite(ctx, "restart_service", {"service": name})
+        cooldown = next(c for c in gate["checks"] if c["name"] == "check_no_restart_loop")
+        assert cooldown["passed"] is (not blocked)
+        assert "exception" not in cooldown["message"].lower()
+        # Elapsed minutes include whole days (timedelta.seconds dropped them).
+        assert f"{minutes_ago}m ago" in cooldown["message"]
+    finally:
+        session.close()
+
+
+def test_scale_preflight_blocks_a_noop(db):
+    db.add(ServiceState(name="test-scale-noop", replica_count=4))
+    db.commit()
+    tool = get_tool("scale_service")
+    result = tool.preflight(db, tool.validate({"service": "test-scale-noop", "replica_count": 4}))
+    assert not result.ok
+    assert any("no-op" in b for b in result.blockers)
+
+
+def test_stale_session_cannot_execute_an_approval_twice(db):
+    """Two on-call engineers race on one fix: exactly one may execute it."""
+    from app.db.base import SessionLocal
+    from app.db.models import Approval
+    from app.services.approvals import ApprovalError, decide
+
+    db.add(ServiceState(name="race-svc", replica_count=2))
+    approval = Approval(
+        run_id="r",
+        incident_id="",
+        tool_name="scale_service",
+        arguments={"service": "race-svc", "replica_count": 3},
+        status="pending",
+    )
+    db.add(approval)
+    db.commit()
+
+    stale = SessionLocal()
+    try:
+        held = stale.get(Approval, approval.id)  # A reads it while still pending
+        assert held.status == "pending"
+        assert decide(db, approval.id, decision="approve")["status"] == "approved"  # B executes
+        with pytest.raises(ApprovalError):  # A, holding a stale copy, must be refused
+            decide(stale, approval.id, decision="approve")
+    finally:
+        stale.close()

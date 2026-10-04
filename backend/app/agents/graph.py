@@ -24,6 +24,7 @@ import time
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
+from sqlalchemy import update
 
 from app.agents.diagnosis_agent import diagnosis_node
 from app.agents.fix_agent import fix_node
@@ -46,6 +47,16 @@ def approval_gate_node(state: AgentState, config: RunnableConfig) -> dict:
     fix = state.get("proposed_fix") or {}
     verification = state.get("verification") or {}
     test_gate = state.get("test_gate") or {}
+
+    # One live proposal per incident. Re-analysing an incident produces a
+    # fresh proposal computed against current state; any older pending one
+    # was computed against state that may no longer hold (approving both
+    # would apply a stale fix), so it is retired rather than left queued.
+    superseded = ctx.db.execute(
+        update(Approval)
+        .where(Approval.incident_id == state["incident_id"], Approval.status == "pending")
+        .values(status="superseded")
+    ).rowcount
 
     approval = Approval(
         run_id=state["run_id"],
@@ -78,6 +89,7 @@ def approval_gate_node(state: AgentState, config: RunnableConfig) -> dict:
                     "tool_name": approval.tool_name,
                     "risk": approval.risk,
                     "confidence": verification.get("confidence"),
+                    "superseded_pending": superseded,
                 },
                 started=started,
             )

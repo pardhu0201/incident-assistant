@@ -18,6 +18,21 @@ class ReportOutput(BaseModel):
     checklist: list[str] = Field(default_factory=list, description="3-6 concrete action items.")
 
 
+def _lead_finding(diagnosis: str) -> str:
+    """The first substantive line of a diagnosis, for the report summary.
+
+    The extractive diagnosis opens with a lead-in ("Likely relevant guidance
+    from the runbooks:") and ends with an italic mode note; taking the first
+    line verbatim put that dangling lead-in into every demo-mode report.
+    """
+    for raw in diagnosis.splitlines():
+        line = raw.strip().removeprefix("- ").removeprefix("* ").strip()
+        if not line or line.endswith(":") or line.startswith(("_", "#")):
+            continue
+        return f"Leading finding: {line}"
+    return "Diagnosis pending."
+
+
 def _deterministic_report(state: AgentState) -> ReportOutput:
     service = state["incident_service"]
     count = state["incident_event_count"]
@@ -27,7 +42,7 @@ def _deterministic_report(state: AgentState) -> ReportOutput:
         f"{severity}-level errors were detected in `{service}` ({count} occurrence"
         f"{'s' if count != 1 else ''} so far). Sample error: "
         f'"{state["sample_message"][:200]}". '
-        f"{state.get('diagnosis', '').split(chr(10))[0] if state.get('diagnosis') else 'Diagnosis pending.'}"
+        f"{_lead_finding(state.get('diagnosis', ''))}"
     )
     checklist = [
         f"Confirm current error rate for `{service}` in the dashboard.",

@@ -26,6 +26,7 @@ def analyse_incident(db: Session, incident_id: str) -> dict:
 
     run = AgentRun(incident_id=incident.id, status="running", llm_mode=llm.mode)
     db.add(run)
+    previous_status = incident.status
     incident.status = "investigating"
     db.commit()
     db.refresh(run)
@@ -71,7 +72,10 @@ def analyse_incident(db: Session, incident_id: str) -> dict:
         except Exception:  # pragma: no cover - defensive
             log.exception("Incident analysis failed")
             root_span.set_attribute("error", True)
+            db.rollback()
             run.status = "failed"
+            # Don't strand the incident in "investigating" - nothing is.
+            incident.status = previous_status
             db.commit()
             raise
 

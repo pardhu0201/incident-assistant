@@ -45,7 +45,9 @@ near production systems:
   *propose* a fix (tool name + validated arguments + preflight preview);
   `execute()` is reachable only from a separate approvals service, only after
   a human decision, which re-validates and re-runs preflight immediately
-  before acting.
+  before acting. Approvals are claimed atomically (no double execution), a
+  re-analysis supersedes the older pending fix, and an error that recurs after
+  a fix **reopens** its incident instead of hiding in a resolved one.
 - **Evaluation against a curated dataset, not vibes** — `backend/evals/` is a
   golden-set harness scoring clustering accuracy, retrieval quality, fix-tool
   accuracy, and — critically — whether an out-of-scope error was actually
@@ -95,7 +97,7 @@ the human-approval boundary, and the data model — are in
 | Observability | Real **OpenTelemetry** spans, custom in-process exporter, optional OTLP export |
 | Database | SQLite (zero setup) or **PostgreSQL** — same code path either way |
 | Frontend | **React 19**, TypeScript, Tailwind v4, Vite |
-| Tests / evals | pytest (42 tests), a golden-set eval harness, ruff |
+| Tests / evals | pytest (52 tests), a golden-set eval harness, ruff |
 | CI/CD | GitHub Actions — lint, tests, evals, full Docker boot-and-healthcheck |
 | Deployment | Single Docker image — free-tier ready on Render |
 
@@ -149,7 +151,7 @@ curl -X POST http://127.0.0.1:8000/api/incidents/1/analyze
 ```bash
 cd backend
 ruff check . && ruff format --check .
-pytest -q                     # 42 tests: clustering, retrieval, tools, agent graph, API
+pytest -q                     # 52 tests: clustering, retrieval, tools, agent graph, API
 python -m evals.run_eval      # clustering/retrieval/fix-accuracy/safety scorecard
 ```
 
@@ -174,8 +176,9 @@ in both modes — supplying an API key swaps only the diagnosis step.
 ## Deploying for free
 
 Full instructions are in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — one
-click to Render's free tier via the bundled `render.yaml`, SQLite persisted on
-the container disk, no database bill.
+click to Render's free tier via the bundled `render.yaml`, SQLite on the
+container disk, no database bill. That disk is wiped on every restart or wake
+from sleep, so the live demo starts empty - click **Load sample logs**.
 
 ## Project layout
 
@@ -192,7 +195,7 @@ backend/
     telemetry/      # OpenTelemetry span exporter + context manager
   data/            # Sample logs + seed runbook corpus
   evals/           # Golden-set evaluation harness
-  tests/           # 42 pytest tests
+  tests/           # 52 pytest tests
 frontend/
   src/
     pages/          # Incidents, incident detail, approvals, dashboard
